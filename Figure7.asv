@@ -27,7 +27,7 @@ hpr = 120e6;
 fst = 0.0290;
 phi = 0.81;
 
-dQ = 0;   % constant heat loss
+dQ = 200000000;   % constant heat loss
 
 %% ---------------- INITIAL CONDITIONS ----------------
 M2 = 2.65;
@@ -47,9 +47,9 @@ for i = 1:length(xgeom)
 end
 
 %% ---------------- CORE AREA MODEL (Fig 6) ----------------
-x_sep    = 0.099;
+x_sep    = 0.180;
 x_min    = 0.200;
-x_attach = 0.284;
+x_attach = 0.213;
 
 Ac_geom = zeros(size(xgeom));
 
