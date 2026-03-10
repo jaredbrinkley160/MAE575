@@ -27,7 +27,7 @@ hpr = 120e6;
 fst = 0.0290;
 phi = 0.72;
 
-dQ = 2000000;   % constant heat loss
+dQ = 1500000;   % constant heat loss
 
 %% ---------------- INITIAL CONDITIONS ----------------
 M2 = 2.65;
@@ -176,7 +176,7 @@ titleStr = sprintf('Max P/P_2 = %.2f, Max T/T_2 = %.2f, Min M = %.2f', maxP, max
 title(titleStr);
 
 xlabel('x (m)')
-legend('A/A_{init}','A_c/A_{init}','Mach','P/P_2','T/T_2','Location','northwest')
+legend('A/A2','A_c/A2','Mach','P/P2','T/T2','Location','best')
 
 %% ======================================================
 % ISOLATOR RHS WITH VARIABLE Ac/A

@@ -20,7 +20,6 @@ Cf = 0.002;
 
 hpr = 120e6; % MJ/kg
 fst = 0.0290;
-% fst = 1/28.8;
 phi = 0.5;
 
 dQ = 600000;   % I have not figured out dQ yet so I approximated with a constant value
@@ -35,17 +34,18 @@ y0 = [M2^2; p2; T2];
 %% Isolator 
 opts = odeset('RelTol',1e-8,'AbsTol',1e-10,'MaxStep',1e-4);
 
-sol_iso = ode45(@(x,y) solve_isolator(x,y,iso,Cf,D3,0.0), [x2 x3], y0, opts);
+sol_iso = ode45(@(x,y) isolator_rhs(x,y,iso,Cf,D3,0.0), [x2 x3], y0, opts);
 
 x_iso = sol_iso.x(:);
 M_iso = sqrt(sol_iso.y(1,:)).';
 p_iso = sol_iso.y(2,:).';
 T_iso = sol_iso.y(3,:).';
 
-y3 = sol_iso.y(:,end); % Burner IC 
+%% ---------------- INITIAL STATE COMBUSTOR ----------------
+y3 = sol_iso.y(:,end);
 
-%% Burner
-sol_brn = ode45(@(x,y) solve_burner(x,y,brn,Cf,D3,dAdx,A3,x3,hpr,fst,phi,dQ), ...
+%% ---------------- SOLVE COMBUSTOR ----------------
+sol_brn = ode45(@(x,y) combustor_rhs(x,y,brn,Cf,D3,dAdx,A3,x3,hpr,fst,phi,dQ), ...
                 [x3 x4], y3, opts);
 
 x_brn = sol_brn.x(:);
@@ -53,14 +53,13 @@ M_brn = sqrt(sol_brn.y(1,:)).';
 p_brn = sol_brn.y(2,:).';
 T_brn = sol_brn.y(3,:).';
 
-%% Post-processing
-% Combine Solutions
+%% ---------------- MERGE SOLUTIONS ----------------
 x = [x_iso ; x_brn];
 M = [M_iso ; M_brn];
 p = [p_iso ; p_brn];
 T = [T_iso ; T_brn];
 
-% Area profile
+%% ---------------- AREA PROFILE ----------------
 A = zeros(size(x));
 for i=1:length(x)
 
@@ -72,10 +71,12 @@ for i=1:length(x)
 
 end
 
-Pr = p / p2; 
+%% Ratios
+Pr = p / p2;
 Tr = T / T2;
 Ar = A / A(1);
 
+%% Extremes
 [maxP, iP] = max(Pr);
 [maxT, iT] = max(Tr);
 [minM, iM] = min(M);
@@ -99,8 +100,10 @@ title(titleStr);
 xlabel('x (m)')
 legend('A/A2','Mach','P/P2','T/T2','Location','best')
 title(titleStr)
-
-function dydx = solve_isolator(~,y,props,Cf,D,dlnA_dx)
+%% ======================================================
+% ISOLATOR RHS
+% ======================================================
+function dydx = isolator_rhs(~,y,props,Cf,D,dlnA_dx)
 
 M2 = y(1);
 p  = y(2);
@@ -108,9 +111,9 @@ T  = y(3);
 
 gamma = props.gamma;
 
-tt = 0.0; % no heat release in isolator
+tt = 0.0;
 
-f = (4*Cf)/D; % friction factor
+f = (4*Cf)/D;
 
 A = zeros(3,3);
 b = zeros(3,1);
@@ -135,8 +138,10 @@ dydx=[M2*u(3); p*u(1); T*u(2)];
 
 end
 
-
-function dydx = solve_burner(x,y,props,Cf,D,dAdx,A3,x3,hpr,fst,phi,dQ)
+%% ======================================================
+% COMBUSTOR RHS
+% ======================================================
+function dydx = combustor_rhs(x,y,props,Cf,D,dAdx,A3,x3,hpr,fst,phi,dQ)
 
 M2 = y(1);
 p  = y(2);
@@ -145,16 +150,16 @@ T  = y(3);
 gamma = props.gamma;
 cp    = props.cp;
 
-A = A3 + dAdx*(x-x3); % A(x)
+A = A3 + dAdx*(x-x3);
 dlnA_dx = dAdx/A;
 
-f = (4*Cf)/D; % friction factor
+f = (4*Cf)/D;
 
-dEta_c =  24 ./ (5 .* (8.*x - 1).^2); % derivative of eq 11
+eta_c =  24 ./ (5 .* (8.*x - 1).^2);
 
-Tt = T*(1 + 0.5*(gamma-1)*M2); % heat release curve
+Tt = T*(1 + 0.5*(gamma-1)*M2);
 
-dTt_dx = (hpr*fst*phi*dEta_c - dQ)/cp;
+dTt_dx = (hpr*fst*phi*eta_c - dQ)/cp;
 
 tt = dTt_dx / Tt;
 
