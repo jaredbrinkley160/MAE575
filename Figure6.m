@@ -1,6 +1,6 @@
 clearvars; clc; close all;
 
-%% ---------------- DOMAIN ----------------
+%% Givens 
 x2 = 0.0;
 x3 = 0.2;
 x4 = 0.5;
@@ -8,11 +8,9 @@ x4 = 0.5;
 dx = 1e-4;
 xgeom = (x2:dx:x4).';
 
-%% ---------------- GAS PROPERTIES ----------------
 iso.gamma = 1.37; iso.R = 287; iso.cp = 1063;
 brn.gamma = 1.31; brn.R = 297; brn.cp = 1255;
 
-%% ---------------- GEOMETRY ----------------
 D3 = 0.06;
 
 A3 = pi*D3^2/4;
@@ -20,23 +18,22 @@ A4 = 2*A3;
 
 dAdx = (A4 - A3)/(x4-x3);
 
-%% ---------------- FLOW CONSTANTS ----------------
 Cf = 0.002;
 
 hpr = 120e6;
 fst = 0.0290;
 phi = 0.72;
 
-dQ = 1500000;   % constant heat loss
+dQ = 1500000;   % constant heat loss approx
 
-%% ---------------- INITIAL CONDITIONS ----------------
+%% IC Vector
 M2 = 2.65;
 p2 = 5e4;
 T2 = 650.0;
 
 y0 = [M2^2; p2; T2];
 
-%% ---------------- GEOMETRY / CORE-AREA MODEL ON FIXED GRID ----------------
+%% Build area curve
 A_geom = zeros(size(xgeom));
 for i = 1:length(xgeom)
     if xgeom(i) <= x3
@@ -46,7 +43,7 @@ for i = 1:length(xgeom)
     end
 end
 
-%% ---------------- CORE AREA MODEL (Fig 6) ----------------
+%% Build core area curve
 x_sep    = 0.180;
 x_min    = 0.200;
 x_attach = 0.213;
@@ -82,17 +79,17 @@ for i = 1:length(xgeom)
     end
 end
 
-%% ---------------- LOCAL RATIO FOR EQUATIONS ----------------
+% Set up ratios for use in equations
 Acr_geom = Ac_geom ./ A_geom;                     % local Ac/A
 dA_dx_geom = zeros(size(xgeom));
 dA_dx_geom(xgeom > x3) = dAdx;
 
 dlnAcr_dx_geom = dAc_dx_geom ./ Ac_geom - dA_dx_geom ./ A_geom;
 
-%% ---------------- ISOLATOR SOLVE ----------------
+%% Isolator 
 opts = odeset('RelTol',1e-8,'AbsTol',1e-10,'MaxStep',1e-4);
 
-sol_iso = ode45(@(x,y) isolator_rhs(x,y,iso,Cf,D3,xgeom,Acr_geom,dlnAcr_dx_geom), ...
+sol_iso = ode45(@(x,y) solve_isolator(x,y,iso,Cf,D3,xgeom,Acr_geom,dlnAcr_dx_geom), ...
                 [x2 x3], y0, opts);
 
 x_iso = sol_iso.x(:);
@@ -100,11 +97,10 @@ M_iso = sqrt(sol_iso.y(1,:)).';
 p_iso = sol_iso.y(2,:).';
 T_iso = sol_iso.y(3,:).';
 
-%% ---------------- INITIAL STATE COMBUSTOR ----------------
-y3 = sol_iso.y(:,end);
+y3 = sol_iso.y(:,end); % Burner IC
 
-%% ---------------- COMBUSTOR SOLVE ----------------
-sol_brn = ode45(@(x,y) combustor_rhs(x,y,brn,Cf,D3,dAdx,A3,x3,hpr,fst,phi,dQ,...
+%% Burner
+sol_brn = ode45(@(x,y) solve_burner(x,y,brn,Cf,D3,dAdx,A3,x3,hpr,fst,phi,dQ,...
                                      xgeom,Acr_geom,dlnAcr_dx_geom), ...
                 [x3 x4], y3, opts);
 
@@ -113,13 +109,14 @@ M_brn = sqrt(sol_brn.y(1,:)).';
 p_brn = sol_brn.y(2,:).';
 T_brn = sol_brn.y(3,:).';
 
-%% ---------------- MERGE SOLUTIONS ----------------
+%% Post-processing
+% Combine Solutions
 x = [x_iso ; x_brn];
 M = [M_iso ; M_brn];
 p = [p_iso ; p_brn];
 T = [T_iso ; T_brn];
 
-%% ---------------- EVALUATE AREA PROFILES ON SOLUTION GRID ----------------
+% Area curve building
 A  = zeros(size(x));
 Ac = zeros(size(x));
 
@@ -146,14 +143,12 @@ for i = 1:length(x)
     end
 end
 
-%% ---------------- RATIOS ----------------
 Pr = p / p2;
 Tr = T / T2;
 Ar = A / A(1);
 Acr_plot = Ac / A(1);      % Ac / A_init for plotting
 Acr_local_plot = Ac ./ A;  % local Ac / A
 
-%% ---------------- EXTREMES ----------------
 [maxP, iP] = max(Pr);
 [maxT, iT] = max(Tr);
 [minM, iM] = min(M);
@@ -162,7 +157,7 @@ xP = x(iP);
 xT = x(iT);
 xM = x(iM);
 
-%% ---------------- PLOT ----------------
+%% Plot
 figure('Color','w'); hold on; grid on;
 axis([0 x4 0 5])
 
@@ -178,10 +173,8 @@ title(titleStr);
 xlabel('x (m)')
 legend('A/A2','A_c/A2','Mach','P/P2','T/T2','Location','best')
 
-%% ======================================================
-% ISOLATOR RHS WITH VARIABLE Ac/A
-% ======================================================
-function dydx = isolator_rhs(x,y,props,Cf,D,xgeom,Acr_geom,dlnAcr_dx_geom)
+
+function dydx = solve_isolator(x,y,props,Cf,D,xgeom,Acr_geom,dlnAcr_dx_geom)
 
 M2 = y(1);
 p  = y(2);
@@ -189,11 +182,10 @@ T  = y(3);
 
 gamma = props.gamma;
 
-tt = 0.0;
-dlnA_dx = 0.0;
-f = (4*Cf)/D;
+tt = 0.0; % no heat release in isolator
+dlnA_dx = 0.0; % no area change in isolator
+f = (4*Cf)/D; % friction factor
 
-% nearest-grid lookup on xgeom, no interpolation
 idx = round((x - xgeom(1)) / (xgeom(2) - xgeom(1))) + 1;
 idx = max(1, min(length(xgeom), idx));
 
@@ -223,10 +215,8 @@ u = A_mat \ b;
 dydx = [M2*u(3); p*u(1); T*u(2)];
 
 end
-%% ======================================================
-% COMBUSTOR RHS WITH VARIABLE Ac/A
-% ======================================================
-function dydx = combustor_rhs(x,y,props,Cf,D,dAdx,A3,x3,hpr,fst,phi,dQ,...
+
+function dydx = solve_burner(x,y,props,Cf,D,dAdx,A3,x3,hpr,fst,phi,dQ,...
                               xgeom,Acr_geom,dlnAcr_dx_geom)
 
 M2 = y(1);
@@ -239,7 +229,6 @@ cp    = props.cp;
 A = A3 + dAdx*(x-x3);
 dlnA_dx = dAdx / A;
 
-% nearest-grid lookup on xgeom, no interpolation
 idx = round((x - xgeom(1)) / (xgeom(2) - xgeom(1))) + 1;
 idx = max(1, min(length(xgeom), idx));
 
@@ -248,7 +237,7 @@ dlnAcr_dx = dlnAcr_dx_geom(idx);
 
 f = (4*Cf)/D;
 
-eta_c = 24 ./ (5 .* (8.*x - 1).^2);
+eta_c = 24 ./ (5 .* (8.*x - 1).^2); % eta derivative
 
 Tt = T*(1 + 0.5*(gamma-1)*M2);
 dTt_dx = (hpr*fst*phi*eta_c - dQ)/cp;

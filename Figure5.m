@@ -23,7 +23,7 @@ fst = 0.0290;
 % fst = 1/28.8;
 phi = 0.5;
 
-dQ = 600000;   % I have not figured out dQ yet so I approximated with a constant value
+% dQ = 300000;   % I have not figured out dQ yet so I approximated with a constant value
 
 %% IC Vector
 M2 = 2.65;
@@ -42,11 +42,45 @@ M_iso = sqrt(sol_iso.y(1,:)).';
 p_iso = sol_iso.y(2,:).';
 T_iso = sol_iso.y(3,:).';
 
-y3 = sol_iso.y(:,end); % Burner IC 
+y3 = sol_iso.y(:,end); 
+%% Create burner IC vector
 
+% Density, speed of sound, speed of flow at isolator end
+rhoI = y3(2) / (iso.R * y3(3));
+aI   = sqrt(iso.gamma * iso.R * y3(3));
+uI   = sqrt(y3(1)) * aI;
+
+f = phi * fst;
+
+% upstream fluxes
+G_air = rhoI * uI;
+momFlux = y3(2) + rhoI * uI^2;
+hTotal  = iso.cp * y3(3) + 0.5 * uI^2;
+G = (1 + f) * G_air;
+
+% Setup a quadratic equation with u at Burner IC as the unknown
+A = (brn.gamma + 1)/(2*brn.gamma);
+B = -(momFlux / G);
+C = ((brn.gamma - 1)/brn.gamma) * hTotal;
+
+% Solve
+uB = roots([A B C]);
+
+% Will return 2 solutions, choose closest one to burner flow to elim. ext.
+[~, idx] = min(abs(uB - uI));
+uB = uB(idx);
+
+% recover burner initial state
+rhoB  = G / uB;
+Tburn = (hTotal - 0.5*uB^2) / brn.cp;
+Pburn = rhoB * brn.R * Tburn;
+aB    = sqrt(brn.gamma * brn.R * Tburn);
+Mburn = uB / aB;
+
+y3b = [Mburn^2; Pburn; Tburn];
 %% Burner
-sol_brn = ode45(@(x,y) solve_burner(x,y,brn,Cf,D3,dAdx,A3,x3,hpr,fst,phi,dQ), ...
-                [x3 x4], y3, opts);
+sol_brn = ode45(@(x,y) solve_burner(x,y,brn,Cf,D3,dAdx,A3,x3,hpr,fst,phi), ...
+                [x3 x4], y3b, opts);
 
 x_brn = sol_brn.x(:);
 M_brn = sqrt(sol_brn.y(1,:)).';
@@ -136,7 +170,7 @@ dydx=[M2*u(3); p*u(1); T*u(2)];
 end
 
 
-function dydx = solve_burner(x,y,props,Cf,D,dAdx,A3,x3,hpr,fst,phi,dQ)
+function dydx = solve_burner(x,y,props,Cf,D,dAdx,A3,x3,hpr,fst,phi)
 
 M2 = y(1);
 p  = y(2);
@@ -152,8 +186,8 @@ f = (4*Cf)/D; % friction factor
 
 dEta_c =  24 ./ (5 .* (8.*x - 1).^2); % derivative of eq 11
 
-Tt = T*(1 + 0.5*(gamma-1)*M2); % heat release curve
-
+Tt = T*(1 + 0.5*(gamma-1)*M2);
+dQ = 2*Cf*cp*(Tt - 600)/D;
 dTt_dx = (hpr*fst*phi*dEta_c - dQ)/cp;
 
 tt = dTt_dx / Tt;
