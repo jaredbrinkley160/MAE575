@@ -20,18 +20,12 @@ Cf = 0.002;
 
 hpr = 120e6; % MJ/kg
 fst = 0.0290;
-% fst = 1/28.8;
 phi = 0.5;
-
-% dQ = 300000;   % I have not figured out dQ yet so I approximated with a constant value
-
 %% IC Vector
 M2 = 2.65;
 p2 = 5e4;
 T2 = 650.0;
-
 y0 = [M2^2; p2; T2];
-
 %% Isolator 
 opts = odeset('RelTol',1e-8,'AbsTol',1e-10,'MaxStep',1e-4);
 
@@ -184,7 +178,13 @@ dlnA_dx = dAdx/A;
 
 f = (4*Cf)/D; % friction factor
 
-dEta_c =  24 ./ (5 .* (8.*x - 1).^2); % derivative of eq 11
+L = 0.3; % x4 - x3
+X = (x - 0.2)/L;
+
+theta = 5; % given influence coeff.
+eta_ctot = 0.8; % given eta 
+
+dEta_c = eta_ctot * theta ./ ( L * (1 + (theta - 1)*X).^2 ); % derivative of eq 11
 
 Tt = T*(1 + 0.5*(gamma-1)*M2);
 dQ = 2*Cf*cp*(Tt - 600)/D;
