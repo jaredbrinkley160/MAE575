@@ -1,138 +1,269 @@
-% Isolator only (attached flow): integrate [M^2, p, T] from x2 to x3 with ode45
-% Closure: solve 3x3 linear system at each x for
-%   u1 = (1/p) dp/dx, u2 = (1/T) dT/dx, u3 = (1/M^2) d(M^2)/dx
-% Then:
-%   d(M^2)/dx = M^2*u3, dp/dx = p*u1, dT/dx = T*u2
-
 clearvars; clc; close all;
 
-
-%% Domain and isolator properties
+%% Givens 
 x2 = 0.0;
 x3 = 0.2;
 x4 = 0.5;
-A = [1 1 2];
 
 dx = 1e-4;
-xj=x2:dx:x4;
+xgeom = (x2:dx:x4).';
 
 iso.gamma = 1.37; iso.R = 287; iso.cp = 1063;
 brn.gamma = 1.31; brn.R = 297; brn.cp = 1255;
 
+D3 = 0.06;
+
+A3 = pi*D3^2/4;
+A4 = 2*A3;
+
+dAdx = (A4 - A3)/(x4-x3);
+
 Cf = 0.002;
-D  = 0.06;      % constant for isolator
-dlnA_dx = 0.0;  % isolator constant area
 
 hpr = 120e6;
 fst = 0.0290;
-dQ = 80000;
+phi = 0.71;
 
-%% Initial conditions at station 2
+dQ = 1500000;   % constant heat loss approx
+
+%% IC Vector
 M2 = 2.65;
 p2 = 5e4;
 T2 = 650.0;
 
-y0 = [M2^2; p2; T2];   % state = [M^2; p; T]
-%%
-% phi = 0.5;
-% eta_tot = 0.8;
-% vartheta = 5;
-% X = (xj-x3) / (x4-x3);
-% eta_c = eta_tot .* (X .* vartheta) ./ (1 + (vartheta-1).*X);
-% 
-% Tbrn = T2 + (hpr * fst * phi * eta_c -dQ) / brn.cp;
-% Tbrn = Tbrn(2002:5001);
+y0 = [M2^2; p2; T2];
 
-%% Integrate
-opts = odeset('RelTol',1e-8,'AbsTol',1e-10,'MaxStep',1e-4);
-sol  = ode45(@(x,y) isolator_rhs(x,y,iso,Cf,D,dlnA_dx), [x2 x3], y0, opts);
-
-x = sol.x(:);
-M = sqrt(sol.y(1,:)).';
-p = sol.y(2,:).';
-T = sol.y(3,:).';
-% Tt = [T' Tbrn];
-
-
-%% Plot ratios
-figure('Color','w'); grid on; hold on;
-axis([0 0.5 0 5]);
-plot([x2 x3 x4], A,'b', 'LineWidth',2);
-plot(x, M,'r', 'LineWidth',2);
-plot(x, p/p2,'k', 'LineWidth',2);
-% plot(xj, Tt/T2,'m', 'LineWidth',2);
-xlabel('x (m)');
-legend('M','p/p2','T/T2','Location','best');%'A/A2',
-title('Attached flow: isolator + combustor (Ac=A)');
-
-%% ---------- Local function ----------
-function dydx = isolator_rhs(~, y, props, Cf, D, dlnA_dx)
-    M2 = y(1);
-    p  = y(2);
-    T  = y(3);
-
-    gamma = props.gamma;
-
-    % log-derivatives unknowns:
-    % u1 = (1/p) dp/dx
-    % u2 = (1/T) dT/dx
-    % u3 = (1/M^2) d(M^2)/dx
-
-    % Isolator: dTt/dx = 0 -> tt = 0
-    tt = 0.0;
-
-    % friction forcing term (4Cf/D)
-    f = (4.0 * Cf) / D;
-
-    % Build 3x3 system A*u = b
-    % (Momentum differential)
-    % u1 + (γM^2)/2 * f + (γM^2)/2*(u2+u3) = 0
-    %
-    % (Energy / total temperature differential)
-    % u2 + (γ-1)/2 * M^2*(u2+u3) = (1+(γ-1)/2*M^2)*tt
-    %
-    % (Continuity + EOS + Mach differential combined)
-    % u1 - u2 + 0.5*(u2+u3) + dlnA/dx = 0
-
-    A = zeros(3,3);
-    b = zeros(3,1);
-
-    % Eq 1
-    A(1,1) = 1.0;
-    A(1,2) = 0.5*gamma*M2;
-    A(1,3) = 0.5*gamma*M2;
-    b(1)   = -0.5*gamma*M2 * f;
-
-    % Eq 2
-    A(2,1) = 0.0;
-    A(2,2) = 1.0 + 0.5*(gamma-1.0)*M2;
-    A(2,3) = 0.5*(gamma-1.0)*M2;
-    b(2)   = (1.0 + 0.5*(gamma-1.0)*M2) * tt;
-
-    % Eq 3
-    A(3,1) = 1.0;
-    A(3,2) = -0.5;   % -u2 + 0.5*u2
-    A(3,3) = 0.5;
-    b(3)   = -dlnA_dx;
-
-    u = A\b;
-    u1 = u(1);
-    u2 = u(2);
-    u3 = u(3);
-
-    dM2dx = M2 * u3;
-    dpdx  = p  * u1;
-    dTdx  = T  * u2;
-
-    dydx = [dM2dx; dpdx; dTdx];
+%% Build area curve
+A_geom = zeros(size(xgeom));
+for i = 1:length(xgeom)
+    if xgeom(i) <= x3
+        A_geom(i) = A3;
+    else
+        A_geom(i) = A3 + dAdx*(xgeom(i)-x3);
+    end
 end
 
-% function dQdx = dQdx(Cf, cp, D, Tref, Tw)
-%     dQdx = (2 .* Cf .* cp ./ D) .* (Tref - Tw);
-% end
-% 
-% function dT = dTtdx(cp, eta_c, dQ, phi)
-%     hpr = 120e6;
-%     fst = 0.0290;
-%     dT = (hpr * fst * phi * eta_c -dQ) / cp
-% end
+%% Build core area curve
+x_sep    = 0.180;
+x_min    = 0.200;
+x_attach = 0.213;
+
+Ac_geom = zeros(size(xgeom));
+
+i_attach = find(xgeom >= x_attach, 1);
+A_attach = A_geom(i_attach);
+
+m1 = (0.822*A3 - A3) / (x_min - x_sep);
+m2 = (A_attach - 0.822*A3) / (x_attach - x_min);
+
+dAc_dx_geom = zeros(size(xgeom));
+
+for i = 1:length(xgeom)
+    xi = xgeom(i);
+
+    if xi < x_sep
+        Ac_geom(i) = A3;
+        dAc_dx_geom(i) = 0.0;
+
+    elseif xi < x_min
+        Ac_geom(i) = A3 + (0.822*A3 - A3)*(xi - x_sep)/(x_min - x_sep);
+        dAc_dx_geom(i) = m1;
+
+    elseif xi < x_attach
+        Ac_geom(i) = 0.822*A3 + (A_attach - 0.822*A3)*(xi - x_min)/(x_attach - x_min);
+        dAc_dx_geom(i) = m2;
+
+    else
+        Ac_geom(i) = A_geom(i);
+        dAc_dx_geom(i) = dAdx;
+    end
+end
+
+% Set up ratios for use in equations
+Acr_geom = Ac_geom ./ A_geom;                     % local Ac/A
+dA_dx_geom = zeros(size(xgeom));
+dA_dx_geom(xgeom > x3) = dAdx;
+
+dlnAcr_dx_geom = dAc_dx_geom ./ Ac_geom - dA_dx_geom ./ A_geom;
+
+%% Isolator 
+opts = odeset('RelTol',1e-8,'AbsTol',1e-10,'MaxStep',1e-4);
+
+sol_iso = ode45(@(x,y) solve_isolator(x,y,iso,Cf,D3,xgeom,Acr_geom,dlnAcr_dx_geom), ...
+                [x2 x3], y0, opts);
+
+x_iso = sol_iso.x(:);
+M_iso = sqrt(sol_iso.y(1,:)).';
+p_iso = sol_iso.y(2,:).';
+T_iso = sol_iso.y(3,:).';
+
+y3 = sol_iso.y(:,end); % Burner IC
+
+%% Burner
+sol_brn = ode45(@(x,y) solve_burner(x,y,brn,Cf,D3,dAdx,A3,x3,hpr,fst,phi,dQ,...
+                                     xgeom,Acr_geom,dlnAcr_dx_geom), ...
+                [x3 x4], y3, opts);
+
+x_brn = sol_brn.x(:);
+M_brn = sqrt(sol_brn.y(1,:)).';
+p_brn = sol_brn.y(2,:).';
+T_brn = sol_brn.y(3,:).';
+
+%% Post-processing
+% Combine Solutions
+x = [x_iso ; x_brn];
+M = [M_iso ; M_brn];
+p = [p_iso ; p_brn];
+T = [T_iso ; T_brn];
+
+% Area curve building
+A  = zeros(size(x));
+Ac = zeros(size(x));
+
+for i = 1:length(x)
+    xi = x(i);
+
+    if xi <= x3
+        A(i) = A3;
+    else
+        A(i) = A3 + dAdx*(xi-x3);
+    end
+
+    if xi < x_sep
+        Ac(i) = A3;
+
+    elseif xi < x_min
+        Ac(i) = A3 + (0.822*A3 - A3)*(xi - x_sep)/(x_min - x_sep);
+
+    elseif xi < x_attach
+        Ac(i) = 0.822*A3 + (A_attach - 0.822*A3)*(xi - x_min)/(x_attach - x_min);
+
+    else
+        Ac(i) = A(i);
+    end
+end
+
+Pr = p / p2;
+Tr = T / T2;
+Ar = A / A(1);
+Acr_plot = Ac / A(1);      % Ac / A_init for plotting
+Acr_local_plot = Ac ./ A;  % local Ac / A
+
+[maxP, iP] = max(Pr);
+[maxT, iT] = max(Tr);
+[minM, iM] = min(M);
+
+xP = x(iP);
+xT = x(iT);
+xM = x(iM);
+
+%% Plot
+figure('Color','w'); hold on; grid on;
+axis([0 x4 0 5])
+
+plot(x,Ar,'b','LineWidth',2)
+plot(x,Acr_plot,'c--','LineWidth',2)
+plot(x,M,'r','LineWidth',2)
+plot(x,Pr,'k','LineWidth',2)
+plot(x,Tr,'m','LineWidth',2)
+
+titleStr = sprintf('Max P/P_2 = %.2f, Max T/T_2 = %.2f, Min M = %.2f', maxP, maxT, minM);
+title(titleStr);
+
+xlabel('x (m)')
+legend('A/A2','A_c/A2','Mach','P/P2','T/T2','Location','best')
+
+
+function dydx = solve_isolator(x,y,props,Cf,D,xgeom,Acr_geom,dlnAcr_dx_geom)
+
+M2 = y(1);
+p  = y(2);
+T  = y(3);
+
+gamma = props.gamma;
+
+tt = 0.0; % no heat release in isolator
+dlnA_dx = 0.0; % no area change in isolator
+f = (4*Cf)/D; % friction factor
+
+idx = round((x - xgeom(1)) / (xgeom(2) - xgeom(1))) + 1;
+idx = max(1, min(length(xgeom), idx));
+
+Acr = Acr_geom(idx);
+dlnAcr_dx = dlnAcr_dx_geom(idx);
+
+A_mat = zeros(3,3);
+b     = zeros(3,1);
+
+A_mat(1,1) = 1;
+A_mat(1,2) = 0.5*gamma*M2*Acr;
+A_mat(1,3) = 0.5*gamma*M2*Acr;
+b(1)       = -0.5*gamma*M2*f;
+
+A_mat(2,1) = 0;
+A_mat(2,2) = 1 + 0.5*(gamma-1)*M2;
+A_mat(2,3) = 0.5*(gamma-1)*M2;
+b(2)       = (1 + 0.5*(gamma-1)*M2)*tt;
+
+A_mat(3,1) = 1;
+A_mat(3,2) = -0.5;
+A_mat(3,3) = 0.5;
+b(3)       = -dlnA_dx - dlnAcr_dx;
+
+u = A_mat \ b;
+
+dydx = [M2*u(3); p*u(1); T*u(2)];
+
+end
+
+function dydx = solve_burner(x,y,props,Cf,D,dAdx,A3,x3,hpr,fst,phi,dQ,...
+                              xgeom,Acr_geom,dlnAcr_dx_geom)
+
+M2 = y(1);
+p  = y(2);
+T  = y(3);
+
+gamma = props.gamma;
+cp    = props.cp;
+
+A = A3 + dAdx*(x-x3);
+dlnA_dx = dAdx / A;
+
+idx = round((x - xgeom(1)) / (xgeom(2) - xgeom(1))) + 1;
+idx = max(1, min(length(xgeom), idx));
+
+Acr = Acr_geom(idx);
+dlnAcr_dx = dlnAcr_dx_geom(idx);
+
+f = (4*Cf)/D;
+
+eta_c = 24 ./ (5 .* (8.*x - 1).^2); % eta derivative
+
+Tt = T*(1 + 0.5*(gamma-1)*M2);
+dQ = 2*Cf*cp*(Tt - 600)/D; % Reynolds analogy for dQ
+dTt_dx = (hpr*fst*phi*eta_c - dQ)/cp;
+tt = dTt_dx / Tt;
+
+A_mat = zeros(3,3);
+b     = zeros(3,1);
+
+A_mat(1,1) = 1;
+A_mat(1,2) = 0.5*gamma*M2*Acr;
+A_mat(1,3) = 0.5*gamma*M2*Acr;
+b(1)       = -0.5*gamma*M2*f;
+
+A_mat(2,1) = 0;
+A_mat(2,2) = 1 + 0.5*(gamma-1)*M2;
+A_mat(2,3) = 0.5*(gamma-1)*M2;
+b(2)       = (1 + 0.5*(gamma-1)*M2)*tt;
+
+A_mat(3,1) = 1;
+A_mat(3,2) = -0.5;
+A_mat(3,3) = 0.5;
+b(3)       = -dlnA_dx - dlnAcr_dx;
+
+u = A_mat\b;
+
+dydx = [M2*u(3); p*u(1); T*u(2)];
+
+end

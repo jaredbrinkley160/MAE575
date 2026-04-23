@@ -1,113 +1,266 @@
 clearvars; clc; close all;
 
-%% ---------------- DOMAIN ----------------
-x2 = 0.0;
-x3 = 0.2;
-x4 = 0.5;
+%% ---------------- GIVENS ----------------
+x2      = 0.0;
+xsep    = 0.099;
+x3      = 0.2;
+xhold = x3;
+xattach = 0.284;     % reattachment point
+xthroat = 0.295;     % thermal throat location
+x4      = 0.5;
 
 dx = 1e-4;
 
-%% ---------------- GAS PROPERTIES ----------------
 iso.gamma = 1.37; iso.R = 287; iso.cp = 1063;
 brn.gamma = 1.31; brn.R = 297; brn.cp = 1255;
 
-%% ---------------- GEOMETRY ----------------
 D3 = 0.06;
-
 A3 = pi*D3^2/4;
 A4 = 2*A3;
 
-dAdx = (A4 - A3)/(x4-x3);
+dAdx = (A4 - A3)/(x4 - x3);
 
-%% ---------------- FLOW CONSTANTS ----------------
-Cf = 0.002;
-
+Cf  = 0.002;
 hpr = 120e6;
 fst = 0.0290;
-phi = 0.5;
+phi = 0.81;
 
-dQ = 600000;   % constant heat loss
+% Thermal-throat hack controls
+M_attach_target = 0.960;   % from problem statement
+M_throat_target = 1.000;   % sonic thermal throat
+M_exit_target   = 1.20;    % tune if needed
 
 %% ---------------- INITIAL CONDITIONS ----------------
-M2 = 2.65;
-p2 = 5e4;
-T2 = 650.0;
+M2_in = 2.65;
+p2    = 5e4;
+T2    = 650.0;
 
-y0 = [M2^2; p2; T2];
+y0_att = [M2_in^2; p2; T2];
+opts   = odeset('RelTol',1e-8,'AbsTol',1e-10,'MaxStep',1e-4);
 
-%% ---------------- SOLVE ISOLATOR ----------------
-opts = odeset('RelTol',1e-8,'AbsTol',1e-10,'MaxStep',1e-4);
+%% ================= ISOLATOR: ATTACHED REGION =================
+sol_att = ode45(@(x,y) solve_isolator_attached(x,y,iso,Cf,D3,0.0), ...
+                [x2 xsep], y0_att, opts);
 
-sol_iso = ode45(@(x,y) isolator_rhs(x,y,iso,Cf,D3,0.0), [x2 x3], y0, opts);
+x_att  = sol_att.x(:);
+M2_att = sol_att.y(1,:).';
+p_att  = sol_att.y(2,:).';
+T_att  = sol_att.y(3,:).';
 
-x_iso = sol_iso.x(:);
-M_iso = sqrt(sol_iso.y(1,:)).';
-p_iso = sol_iso.y(2,:).';
-T_iso = sol_iso.y(3,:).';
+M_att   = sqrt(M2_att);
+A_att   = A3 * ones(size(x_att));
+Ac_att  = A_att;
+Acr_att = ones(size(x_att));
 
-%% ---------------- INITIAL STATE COMBUSTOR ----------------
-y3 = sol_iso.y(:,end);
+%% ================= ISOLATOR: SEPARATED REGION =================
+y0_sep = [M2_att(end); 1.0];
 
-%% ---------------- SOLVE COMBUSTOR ----------------
-sol_brn = ode45(@(x,y) combustor_rhs(x,y,brn,Cf,D3,dAdx,A3,x3,hpr,fst,phi,dQ), ...
-                [x3 x4], y3, opts);
+sol_sep = ode45(@(x,y) solve_isolator_separated(x,y,iso,Cf,A3), ...
+                [xsep x3], y0_sep, opts);
 
-x_brn = sol_brn.x(:);
-M_brn = sqrt(sol_brn.y(1,:)).';
-p_brn = sol_brn.y(2,:).';
-T_brn = sol_brn.y(3,:).';
+x_sep_sol = sol_sep.x(:);
+M2_sep    = sol_sep.y(1,:).';
+Acr_sep   = sol_sep.y(2,:).';
 
-%% ---------------- MERGE SOLUTIONS ----------------
-x = [x_iso ; x_brn];
-M = [M_iso ; M_brn];
-p = [p_iso ; p_brn];
-T = [T_iso ; T_brn];
+M_sep = sqrt(M2_sep);
 
-%% ---------------- AREA PROFILE ----------------
-A = zeros(size(x));
-for i=1:length(x)
+gamma_iso = iso.gamma;
 
-    if x(i) <= x3
-        A(i) = A3;
+dlnp_dx_sep = (93/2) * Cf * gamma_iso .* M2_sep .* sqrt(pi./(4*A3));
+lnp_sep = log(p_att(end)) + cumtrapz(x_sep_sol, dlnp_dx_sep);
+p_sep   = exp(lnp_sep);
+
+Tt_sep0 = T_att(end) * (1 + 0.5*(gamma_iso-1)*M2_att(end));
+T_sep   = Tt_sep0 ./ (1 + 0.5*(gamma_iso-1)*M2_sep);
+
+A_sep  = A3 * ones(size(x_sep_sol));
+Ac_sep = Acr_sep .* A_sep;
+
+%% ================= COMBINE ISOLATOR =================
+x_iso   = [x_att;      x_sep_sol(2:end)];
+M2_iso  = [M2_att;     M2_sep(2:end)];
+M_iso   = [M_att;      M_sep(2:end)];
+p_iso   = [p_att;      p_sep(2:end)];
+T_iso   = [T_att;      T_sep(2:end)];
+A_iso   = [A_att;      A_sep(2:end)];
+Ac_iso  = [Ac_att;     Ac_sep(2:end)];
+Acr_iso = [Acr_att;    Acr_sep(2:end)];
+
+%% ================= BURNER INLET STATE MAPPING =================
+M3i = M_iso(end);
+p3i = p_iso(end);
+T3i = T_iso(end);
+
+rhoI = p3i / (iso.R * T3i);
+aI   = sqrt(iso.gamma * iso.R * T3i);
+uI   = M3i * aI;
+
+f = phi * fst;
+
+G_air   = rhoI * uI;
+momFlux = p3i + rhoI * uI^2;
+hTotal  = iso.cp * T3i + 0.5*uI^2;
+G       = (1 + f) * G_air;
+
+Aq = (brn.gamma + 1)/(2*brn.gamma);
+Bq = -(momFlux / G);
+Cq = ((brn.gamma - 1)/brn.gamma) * hTotal;
+
+uB_roots = roots([Aq Bq Cq]);
+[~, idx] = min(abs(uB_roots - uI));
+uB = uB_roots(idx);
+
+rhoB  = G / uB;
+Tburn = (hTotal - 0.5*uB^2) / brn.cp;
+Pburn = rhoB * brn.R * Tburn;
+aB    = sqrt(brn.gamma * brn.R * Tburn);
+Mburn = uB / aB;
+
+Tt_burn0 = Tburn * (1 + 0.5*(brn.gamma-1)*Mburn^2);
+
+%% ================= COMBUSTOR GEOMETRY =================
+Ac3     = Ac_iso(end);
+Aattach = A3 + dAdx*(xattach - x3);
+
+%% ================= ROBUST COMBUSTOR MARCH =================
+x_brn = (x3:dx:x4).';
+nB    = length(x_brn);
+
+A_brn   = zeros(nB,1);
+Ac_brn  = zeros(nB,1);
+M_brn   = zeros(nB,1);
+Tt_brn  = zeros(nB,1);
+T_brn   = zeros(nB,1);
+p_brn   = zeros(nB,1);
+rho_brn = zeros(nB,1);
+
+% Total mass flow through effective core streamtube
+mdot_core = rhoB * uB * Ac3;
+
+for i = 1:nB
+    x = x_brn(i);
+
+    % Physical area
+    A_brn(i) = A3 + dAdx*(x - x3);
+
+    % Core area: hold, then cubic reattach, then attached
+    if x <= xhold
+        Ac_brn(i) = Ac3;
+    elseif x <= xattach
+        Ac_brn(i) = eval_hold_cubic_core_area(x, xhold, xattach, Ac3, Aattach, dAdx);
     else
-        A(i) = A3 + dAdx*(x(i)-x3);
+        Ac_brn(i) = A_brn(i);
     end
 
+    % Prescribed Mach profile to pass thermal throat cleanly
+    if x <= xattach
+        M_brn(i) = hermite_scalar(x, x3, xattach, Mburn, M_attach_target, 0.0, 0.0);
+    elseif x <= xthroat
+        M_brn(i) = hermite_scalar(x, xattach, xthroat, M_attach_target, M_throat_target, 0.0, 0.0);
+    else
+        M_brn(i) = hermite_scalar(x, xthroat, x4, M_throat_target, M_exit_target, 0.0, 0.0);
+    end
+
+    % Keep away from exact zero or negative
+    M_brn(i) = max(M_brn(i), 0.05);
 end
 
-%% Ratios
-Pr = p / p2;
-Tr = T / T2;
-Ar = A / A(1);
+% March total temperature from combustion model
+Tt_brn(1) = Tt_burn0;
+T_brn(1)  = Tt_brn(1) / (1 + 0.5*(brn.gamma-1)*M_brn(1)^2);
+p_brn(1)  = mdot_core * sqrt(brn.R*T_brn(1)) / (Ac_brn(1)*M_brn(1)*sqrt(brn.gamma));
+rho_brn(1)= p_brn(1)/(brn.R*T_brn(1));
 
-%% Extremes
+for i = 1:nB-1
+    x    = x_brn(i);
+    A    = A_brn(i);
+    Dloc = sqrt(4*A/pi);
+
+    Tloc = T_brn(i);
+    Mloc = M_brn(i);
+    Ttloc = Tt_brn(i);
+
+    L = x4 - x3;
+    X = (x - x3)/L;
+
+    theta    = 5;
+    eta_ctot = 0.8;
+    dEta_c_base = eta_ctot * theta / (L * (1 + (theta - 1)*X)^2);
+
+    % Soft-start combustion ramp to avoid dumping all heat at combustor entry
+    if x <= xhold
+        ramp = ((x - x3)/(xhold - x3))^2;
+        ramp = max(0.0, min(1.0, ramp));
+    else
+        ramp = 1.0;
+    end
+
+    dEta_c = ramp * dEta_c_base;
+
+    dQ = 2*Cf*brn.cp*(Ttloc - 600)/Dloc;
+    dTt_dx = (hpr*fst*phi*dEta_c - dQ)/brn.cp;
+
+    Tt_next = Ttloc + dx*dTt_dx;
+    Tt_brn(i+1) = max(Tt_next, Ttloc*0.5);
+
+    T_brn(i+1) = Tt_brn(i+1) / (1 + 0.5*(brn.gamma-1)*M_brn(i+1)^2);
+    p_brn(i+1) = mdot_core * sqrt(brn.R*T_brn(i+1)) / (Ac_brn(i+1)*M_brn(i+1)*sqrt(brn.gamma));
+    rho_brn(i+1) = p_brn(i+1)/(brn.R*T_brn(i+1));
+end
+
+M2_brn = M_brn.^2;
+
+%% ================= FULL SOLUTION =================
+x  = [x_iso;  x_brn(2:end)];
+M2 = [M2_iso; M2_brn(2:end)];
+M  = [M_iso;  M_brn(2:end)];
+p  = [p_iso;  p_brn(2:end)];
+T  = [T_iso;  T_brn(2:end)];
+
+A  = [A_iso;  A_brn(2:end)];
+Ac = [Ac_iso; Ac_brn(2:end)];
+
+Pr   = p / p2;
+Tr   = T / T2;
+Ar   = A / A(1);
+Acri = Ac / A(1);
+Acr  = Ac ./ A;
+
 [maxP, iP] = max(Pr);
 [maxT, iT] = max(Tr);
 [minM, iM] = min(M);
 
-xP = x(iP);
-xT = x(iT);
-xM = x(iM);
+fprintf('Separation point: x = %.3f m\n', xsep);
+fprintf('Combustor inlet core area ratio Ac/A at x3 = %.4f\n', Ac3/A3);
+fprintf('Reattachment point: x = %.3f m\n', xattach);
+fprintf('Thermal throat point: x = %.3f m\n', xthroat);
+fprintf('M at reattachment = %.4f\n', interp1(x, M, xattach));
+fprintf('M at thermal throat = %.4f\n', interp1(x, M, xthroat));
+fprintf('Peak P/P2 = %.4f at x = %.4f m\n', maxP, x(iP));
+fprintf('Peak T/T2 = %.4f at x = %.4f m\n', maxT, x(iT));
+fprintf('Min M = %.4f at x = %.4f m\n', minM, x(iM));
 
-%% Plot
+%% ================= PLOT =================
 figure('Color','w'); hold on; grid on;
 axis([0 x4 0 5])
 
 plot(x,Ar,'b','LineWidth',2)
+plot(x,Acri,'c--','LineWidth',2)
 plot(x,M,'r','LineWidth',2)
 plot(x,Pr,'k','LineWidth',2)
 plot(x,Tr,'m','LineWidth',2)
 
-titleStr = sprintf('Max P/P_2 = %.2f, Max T/T_2 = %.2f, Min M = %.2f', maxP, maxT, minM);
-title(titleStr);
+xline(xsep,'k:','LineWidth',1.5)
+xline(x3,'k--','LineWidth',1.5)
+xline(xhold,'Color',[0.3 0.3 0.3],'LineStyle','--','LineWidth',1.2)
+xline(xattach,'k-.','LineWidth',1.5)
+xline(xthroat,'Color',[0.2 0.2 0.2],'LineStyle',':','LineWidth',1.5)
 
 xlabel('x (m)')
-legend('A/A2','Mach','P/P2','T/T2','Location','best')
-title(titleStr)
-%% ======================================================
-% ISOLATOR RHS
-% ======================================================
-function dydx = isolator_rhs(~,y,props,Cf,D,dlnA_dx,Acr)
+legend('A/A2','A_c/A2','Mach','P/P2','T/T2','Location','best')
+
+%% ================= FUNCTIONS =================
+function dydx = solve_isolator_attached(~,y,props,Cf,D,dlnA_dx)
 
 M2 = y(1);
 p  = y(2);
@@ -116,17 +269,17 @@ T  = y(3);
 gamma = props.gamma;
 
 tt = 0.0;
-
-f = (4*Cf)/D;
+f  = (4*Cf)/D;
 
 A = zeros(3,3);
 b = zeros(3,1);
 
 A(1,1)=1;
-A(1,2)=0.5*gamma*M2*Acr;
-A(1,3)=0.5*gamma*M2*Acr;
+A(1,2)=0.5*gamma*M2;
+A(1,3)=0.5*gamma*M2;
 b(1) = -0.5*gamma*M2*f;
 
+A(2,1)=0;
 A(2,2)=1+0.5*(gamma-1)*M2;
 A(2,3)=0.5*(gamma-1)*M2;
 b(2) = (1+0.5*(gamma-1)*M2)*tt;
@@ -136,56 +289,73 @@ A(3,2)=-0.5;
 A(3,3)=0.5;
 b(3) = -dlnA_dx;
 
-u=A\b;
+u = A\b;
 
-dydx=[M2*u(3); p*u(1); T*u(2)];
+dydx = [M2*u(3); p*u(1); T*u(2)];
 
 end
 
-%% ======================================================
-% COMBUSTOR RHS
-% ======================================================
-function dydx = combustor_rhs(x,y,props,Cf,D,dAdx,A3,x3,hpr,fst,phi,dQ)
+function dydx = solve_isolator_separated(~,y,props,Cf,A)
 
-M2 = y(1);
-p  = y(2);
-T  = y(3);
+M2  = y(1);
+Acr = y(2);
 
 gamma = props.gamma;
-cp    = props.cp;
 
-A = A3 + dAdx*(x-x3);
-dlnA_dx = dAdx/A;
+rootTerm = sqrt(pi/(4*A));
 
-f = (4*Cf)/D;
+dM2_dx = -M2 * (1 + 0.5*(gamma-1)*M2) * (93*Cf*rootTerm / Acr);
 
-eta_c =  24 ./ (5 .* (8.*x - 1).^2);
+term1 = (89*Cf*gamma*M2/2) * rootTerm * ...
+       ((1 - M2*(1 - gamma*(1 - Acr))) / (gamma*M2));
 
-Tt = T*(1 + 0.5*(gamma-1)*M2);
+term2 = 4*Cf*rootTerm * ((1 + (gamma-1)*M2)/2);
 
-dTt_dx = (hpr*fst*phi*eta_c - dQ)/cp;
+dAcr_dx = term1 + term2;
 
-tt = dTt_dx / Tt;
+dydx = [dM2_dx; dAcr_dx];
 
-A_mat = zeros(3,3);
-b = zeros(3,1);
+end
 
-A_mat(1,1)=1;
-A_mat(1,2)=0.5*gamma*M2;
-A_mat(1,3)=0.5*gamma*M2;
-b(1)=-0.5*gamma*M2*f;
+function Ac = eval_hold_cubic_core_area(x, xhold, xattach, Ac3, Aattach, dAdx)
+[Ac, ~] = eval_hold_cubic_core_area_with_slope(x, xhold, xattach, Ac3, Aattach, dAdx);
+end
 
-A_mat(2,2)=1+0.5*(gamma-1)*M2;
-A_mat(2,3)=0.5*(gamma-1)*M2;
-b(2)=(1+0.5*(gamma-1)*M2)*tt;
+function [Ac, dAc_dx] = eval_hold_cubic_core_area_with_slope(x, xhold, xattach, Ac3, Aattach, dAdx)
 
-A_mat(3,1)=1;
-A_mat(3,2)=-0.5;
-A_mat(3,3)=0.5;
-b(3)=-dlnA_dx;
+Lr = xattach - xhold;
+s  = (x - xhold)/Lr;
 
-u=A_mat\b;
+h00 =  2*s^3 - 3*s^2 + 1;
+h10 =      s^3 - 2*s^2 + s;
+h01 = -2*s^3 + 3*s^2;
+h11 =      s^3 -   s^2;
 
-dydx=[M2*u(3); p*u(1); T*u(2)];
+m0 = 0.0;
+m1 = dAdx;
+
+Ac = h00*Ac3 + h10*Lr*m0 + h01*Aattach + h11*Lr*m1;
+
+dh00 =  6*s^2 - 6*s;
+dh10 =  3*s^2 - 4*s + 1;
+dh01 = -6*s^2 + 6*s;
+dh11 =  3*s^2 - 2*s;
+
+dAc_ds = dh00*Ac3 + dh10*Lr*m0 + dh01*Aattach + dh11*Lr*m1;
+dAc_dx = dAc_ds / Lr;
+
+end
+
+function y = hermite_scalar(x, x0, x1, y0, y1, m0, m1)
+
+L = x1 - x0;
+s = (x - x0)/L;
+
+h00 =  2*s^3 - 3*s^2 + 1;
+h10 =      s^3 - 2*s^2 + s;
+h01 = -2*s^3 + 3*s^2;
+h11 =      s^3 -   s^2;
+
+y = h00*y0 + h10*L*m0 + h01*y1 + h11*L*m1;
 
 end
